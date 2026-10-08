@@ -8,8 +8,8 @@ const (
 	ConsoleHost    = "https://www.trae.cn"
 	ClientID       = "en1oxy7wnw8j9n" // SOLO stable
 	AppID          = "6eefa01c-1036-4c7e-9ca5-d891f63bfcd8"
-	IdeVersion     = "0.1.52"
-	IdeVersionCode = "20260811"
+	IdeVersion     = "0.1.69"   // 上游按 x-ide-version 门控模型可用性，旧版本拿不到新模型
+	IdeVersionCode = "20260917" // 与 IdeVersion 配套（TRAE SOLO CN 0.1.69）
 	DeviceBrand    = "Apple"
 	OSVersion      = "macOS 15.7.4"
 	Function       = "solo_work_lite"

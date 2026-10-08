@@ -198,6 +198,11 @@ func importLocalLogin(up *upstream.Client, authDir string) *auth.Auth {
 		log.Printf("[LocalImport] 已找到 %s，但无法解析 uid，跳过自动导入", lt.Path)
 		return nil
 	}
+	// 落盘前校验凭证是否被 SOLO 通道接受（GetUserInfo 只过 oauth 主机，不足以证明可用）。
+	if _, ferr := up.FetchModels(a); ferr != nil {
+		log.Printf("[LocalImport] 本机 token 不被上游接受（%v），跳过自动导入；请改用 Web 登录导入", ferr)
+		return nil
+	}
 	if err := os.MkdirAll(authDir, 0o755); err != nil {
 		log.Printf("[LocalImport] 创建 %s 失败: %v", authDir, err)
 		return nil
