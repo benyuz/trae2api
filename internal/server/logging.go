@@ -25,8 +25,9 @@ type chatStat struct {
 	mode   string // "stream" | "sync"
 	uid    string // 完整 uid，展示时只取前 8 位
 	ttfb   time.Duration
-	toks   int // <0 表示 usage 缺失 → 显示 "-"
+	toks   int    // <0 表示 usage 缺失 → 显示 "-"
 	status int
+	errMsg string // 失败原因（终端错误出口填），空则不显示
 
 	logged bool
 }
@@ -46,7 +47,7 @@ func (s *chatStat) done() {
 		return
 	}
 	s.logged = true
-	logChatRow(s.ttfb, time.Since(s.start), s.model, s.mode, s.uid, s.status, s.toks)
+	logChatRow(s.ttfb, time.Since(s.start), s.model, s.mode, s.uid, s.status, s.toks, s.errMsg)
 }
 
 // soloStatsReader 解析原生 SOLO SSE（event:/data: 双行），记录首个 output 事件的
@@ -183,14 +184,12 @@ func uidPrefix(uid string) string {
 }
 
 // logChatRow 打印一行请求级表格日志（直接输出 stdout，无 log 时间戳前缀）。
-func logChatRow(ttfb, total time.Duration, model, mode, uid string, status int, toks int) {
+// model 完整显示（不截断）；errMsg 非空时在行尾追加 err= 字段。
+func logChatRow(ttfb, total time.Duration, model, mode, uid string, status int, toks int, errMsg string) {
 	if !chatLogEnabled {
 		return
 	}
 	seq := chatSeq.Add(1)
-	if len(model) > 15 {
-		model = model[:15]
-	}
 	tokField := "-"
 	tokpsField := "-"
 	if toks >= 0 {
@@ -205,7 +204,11 @@ func logChatRow(ttfb, total time.Duration, model, mode, uid string, status int, 
 	if ttfb > 0 {
 		ttfbMS = fmt.Sprintf("%dms", ttfb.Milliseconds())
 	}
-	fmt.Fprintf(os.Stdout, "| #%03d | %s | %s | %s | %d | uid=%s | TTFB=%s | tok=%s | %stok/s | total=%.1fs |\n",
+	errField := ""
+	if msg := sanitizeLogField(errMsg); msg != "" {
+		errField = " err=" + msg + " |"
+	}
+	fmt.Fprintf(os.Stdout, "| #%03d | %s | %s | %s | %d | uid=%s | TTFB=%s | tok=%s | %stok/s | total=%.1fs |%s\n",
 		seq,
 		time.Now().Format("15:04:05"),
 		model,
@@ -216,5 +219,22 @@ func logChatRow(ttfb, total time.Duration, model, mode, uid string, status int, 
 		tokField,
 		tokpsField,
 		total.Seconds(),
+		errField,
 	)
+}
+
+// sanitizeLogField 把错误信息压成单行、限长，避免破坏表格日志。
+func sanitizeLogField(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.Join(strings.Fields(s), " ")
+	const maxLen = 300
+	if len(s) > maxLen {
+		s = s[:maxLen] + "…"
+	}
+	return s
 }

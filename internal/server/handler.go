@@ -546,6 +546,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	configName, err := h.mapModel(peek.Model)
 	if err != nil {
 		st.status = http.StatusBadRequest
+		st.errMsg = err.Error()
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -564,6 +565,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	if isWorkModel(peek.Model) && !hasTools {
 		if h.cfg.WorkMode == upstream.WorkModeDisabled || (h.cfg.WorkClient != nil && h.cfg.WorkClient.Mode() == upstream.WorkModeDisabled) {
 			st.status = http.StatusForbidden
+			st.errMsg = "work channel disabled by configuration"
 			writeOpenAIError(w, http.StatusForbidden, "work_disabled", "work channel is disabled by configuration (TW2A_WORK_MODE=disabled)")
 			return
 		}
@@ -574,6 +576,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				msg += ": " + err.Error()
 			}
+			st.errMsg = msg
 			writeOpenAIError(w, http.StatusServiceUnavailable, "no_healthy_account", msg)
 		} else {
 			st.status = http.StatusOK
@@ -696,6 +699,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			st.status = http.StatusBadGateway
+			st.errMsg = err.Error()
 			writeOpenAIError(w, http.StatusBadGateway, "upstream_parse", err.Error())
 			return
 		}
@@ -716,6 +720,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	if lastErr != nil {
 		msg += ": " + lastErr.Error()
 	}
+	st.errMsg = msg
 	writeOpenAIError(w, http.StatusServiceUnavailable, "no_healthy_account", msg)
 }
 
