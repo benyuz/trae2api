@@ -83,6 +83,8 @@ go build -o trae2api ./cmd/server
 
 首次运行会自动生成 `config.json`，并在未提供 API Key 时自动生成一个随机 Key（写入 `config.json` 并在启动日志中打印）。之后可用 `TW2A_API_KEY` 环境变量覆盖。
 
+若 `auths/` 为空，启动时还会尝试**自动导入本机 Trae CN 客户端的登录态**（读取 `~/.trae-cn/trae-jwt-token`），无需手动 Web 登录。注意：该本机 token 不含 refresh token，仅在有效期内可用，过期后需重新打开 Trae CN 客户端刷新或改用 Web 登录导入。
+
 ## Web 管理面板
 
 服务启动后，访问 `http://127.0.0.1:7864/admin` 即可进入可视化管理后台：

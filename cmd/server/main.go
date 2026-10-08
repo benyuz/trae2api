@@ -27,21 +27,27 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	auths, err := auth.LoadDir(cfg.AuthDir)
-	if err != nil {
-		log.Fatalf("load auths: %v", err)
-	}
-	log.Printf("loaded %d account(s) from %s", len(auths), cfg.AuthDir)
-
-	p := pool.New(cfg.StateFile)
-	p.SyncToDir(auths) // 对齐：剔除 state.json 中已删除 auth 文件的幽灵账号
-
 	up := upstream.New()
 	up.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	// 流式客户端无总超时，仅用首字节兜底（时长由 SSE 流本身决定）。
 	if tr, ok := up.StreamHTTP.Transport.(*http.Transport); ok {
 		tr.ResponseHeaderTimeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	}
+
+	auths, err := auth.LoadDir(cfg.AuthDir)
+	if err != nil {
+		log.Fatalf("load auths: %v", err)
+	}
+	// auths/ 为空时，尝试自动导入本机 TRAE 客户端登录（对标 workbuddy2api）。
+	if len(auths) == 0 {
+		if a := importLocalLogin(up, cfg.AuthDir); a != nil {
+			auths = append(auths, a)
+		}
+	}
+	log.Printf("loaded %d account(s) from %s", len(auths), cfg.AuthDir)
+
+	p := pool.New(cfg.StateFile)
+	p.SyncToDir(auths) // 对齐：剔除 state.json 中已删除 auth 文件的幽灵账号
 
 	workCfg := upstream.DefaultWorkClientConfig()
 	if cfg.WorkHost != "" {
@@ -147,4 +153,60 @@ func main() {
 		log.Fatalf("http: %v", err)
 	}
 	log.Printf("bye")
+}
+
+// importLocalLogin 在 auths/ 为空时尝试自动导入本机 TRAE 客户端登录。
+// 读取本机 trae-jwt-token → GetUserInfo 换权威 uid → 落盘 auths/ 并返回。
+// 任一步失败都返回 nil（仅记日志），不影响服务启动。
+func importLocalLogin(up *upstream.Client, authDir string) *auth.Auth {
+	lt, err := auth.DiscoverLocalToken()
+	if err != nil {
+		log.Printf("[LocalImport] 发现本机登录失败: %v", err)
+		return nil
+	}
+	if lt == nil {
+		return nil
+	}
+	machineID, err := auth.NewMachineID()
+	if err != nil {
+		log.Printf("[LocalImport] 生成 machine id 失败: %v", err)
+		return nil
+	}
+	a := &auth.Auth{
+		AccessToken: lt.AccessToken,
+		Domain:      "trae.cn",
+		ApiHost:     "https://api.trae.com.cn",
+		MachineID:   machineID,
+		ExpiresAt:   lt.ExpiresAt,
+	}
+	if _, derr := a.EnsureCheckinDeviceID(); derr != nil {
+		log.Printf("[LocalImport] 生成 device id 失败: %v", derr)
+		return nil
+	}
+	// 用 token 换权威 uid / nickname（失败则回退 JWT payload 里的 uid）。
+	if uid, nick, ent, gerr := up.GetUserInfo(a); gerr == nil && uid != "" {
+		a.UID = uid
+		a.Nickname = nick
+		a.EnterpriseID = ent
+	} else {
+		if gerr != nil {
+			log.Printf("[LocalImport] GetUserInfo: %v", gerr)
+		}
+		a.UID = lt.UID
+	}
+	if a.UID == "" {
+		log.Printf("[LocalImport] 已找到 %s，但无法解析 uid，跳过自动导入", lt.Path)
+		return nil
+	}
+	if err := os.MkdirAll(authDir, 0o755); err != nil {
+		log.Printf("[LocalImport] 创建 %s 失败: %v", authDir, err)
+		return nil
+	}
+	a.FilePath = auth.FilePathFor(authDir, a.UID)
+	if err := a.SaveAtomic(); err != nil {
+		log.Printf("[LocalImport] 落盘失败: %v", err)
+		return nil
+	}
+	log.Printf("[LocalImport] 已从本机登录自动导入账号 uid=%s (%s)，来源 %s", a.UID, a.Nickname, lt.Path)
+	return a
 }
