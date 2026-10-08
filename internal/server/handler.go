@@ -103,6 +103,7 @@ func NewHandler(cfg Config) *Handler {
 	h.mux.HandleFunc("GET /admin", h.adminPage)
 	h.mux.HandleFunc("GET /admin/api/credits", h.adminCredits)
 	h.mux.HandleFunc("GET /admin/api/overview", h.adminOverview)
+	h.mux.HandleFunc("GET /admin/api/models", h.adminModels)
 	// 账号 CRUD
 	h.mux.HandleFunc("GET /admin/api/accounts", h.adminAccounts)
 	h.mux.HandleFunc("POST /admin/api/accounts/import", h.withAdminAuth(h.adminImportAccount))

@@ -100,6 +100,7 @@
     <h1>trae2api 控制台<small>凭证管理 · 额度监控</small></h1>
     <div class="toolbar">
       <span id="ts"></span>
+      <button class="btn" onclick="showModels(false)">可用模型</button>
       <button class="btn" onclick="refreshActive()">刷新</button>
     </div>
   </header>
@@ -150,7 +151,10 @@
   <div class="modal">
     <h3 id="modalTitle">凭证预览（脱敏）</h3>
     <pre id="modalBody"></pre>
-    <button class="btn sm close" onclick="closeModal()">关闭</button>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">
+      <button class="btn sm" id="modalAction" style="display:none"></button>
+      <button class="btn sm close" onclick="closeModal()">关闭</button>
+    </div>
   </div>
 </div>
 
@@ -219,7 +223,7 @@ function renderOverview(d){
     : '③ 未就绪 · 先登录一个账号';
   el.innerHTML =
       '<div class="flowstep '+acctCls+'"><span class="dot"></span>'+acctTxt+'</div>'
-    + '<div class="flowstep '+modelCls+'"><span class="dot"></span>② 模型表 <b>'+d.models_total+'</b> 个 · '+esc(src)+'</div>'
+    + '<div class="flowstep '+modelCls+'" style="cursor:pointer" onclick="showModels(false)" title="点击查看完整模型列表"><span class="dot"></span>② 模型表 <b>'+d.models_total+'</b> 个 · '+esc(src)+' · 点击查看</div>'
     + '<div class="flowstep '+readyCls+'"><span class="dot"></span>'+readyTxt+'</div>';
 }
 
@@ -297,9 +301,30 @@ async function showJSON(uid){
   const d = await r.json();
   document.getElementById('modalTitle').textContent = '凭证预览（脱敏）— '+(d.nickname||d.uid);
   document.getElementById('modalBody').textContent = JSON.stringify(d, null, 2);
+  setModalAction(null);
   document.getElementById('modalBg').classList.add('show');
 }
-function closeModal(){ document.getElementById('modalBg').classList.remove('show'); }
+function closeModal(){ setModalAction(null); document.getElementById('modalBg').classList.remove('show'); }
+// 设置 modal 底部的可选操作按钮（label 为空则隐藏）。
+function setModalAction(label, fn){
+  const b = document.getElementById('modalAction');
+  if(label){ b.style.display=''; b.textContent=label; b.onclick=fn; }
+  else { b.style.display='none'; b.onclick=null; }
+}
+// 查看当前可用模型（动态拉取；refresh=true 清缓存重拉）。
+async function showModels(refresh){
+  try{
+    const r = await fetch('/admin/api/models'+(refresh?'?refresh=1':''), {cache:'no-store'});
+    const d = await r.json();
+    const src = d.source==='dynamic' ? '动态(上游)' : '静态回退';
+    document.getElementById('modalTitle').textContent = '可用模型 · '+d.count+' 个 · '+src;
+    document.getElementById('modalBody').textContent =
+      (d.models||[]).map(m=>m.id+'    ('+(m.owned_by||'')+', '+(m.context_length||'-')+')').join('\n')
+      + (d.source==='dynamic' ? '' : '\n\n(静态回退：动态拉取失败或暂无可用账号)');
+    setModalAction('重新拉取', ()=>showModels(true));
+    document.getElementById('modalBg').classList.add('show');
+  }catch(e){ alert('获取模型失败：'+e.message); }
+}
 
 /* ─── 导入 ─── */
 async function importCred(){

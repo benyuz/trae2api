@@ -49,6 +49,31 @@ func (h *Handler) adminOverview(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// adminModels 查看当前可用模型（只读，无鉴权）。带 ?refresh=1 时清缓存并重新拉取上游。
+func (h *Handler) adminModels(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("refresh") != "" {
+		dynamicModelsCache.Lock()
+		dynamicModelsCache.ids = nil
+		dynamicModelsCache.fetched = time.Time{}
+		dynamicModelsCache.lastFail = time.Time{}
+		dynamicModelsCache.Unlock()
+	}
+	ms, src := h.modelListWithSource()
+	models := make([]map[string]any, 0, len(ms))
+	for _, m := range ms {
+		models = append(models, map[string]any{
+			"id":             m["id"],
+			"owned_by":       m["owned_by"],
+			"context_length": m["context_length"],
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"source": src, // "dynamic" | "static"
+		"count":  len(models),
+		"models": models,
+	})
+}
+
 // adminCredits 查询全部账号的实时额度 + 签到状态（并发拉取上游）。
 func (h *Handler) adminCredits(w http.ResponseWriter, r *http.Request) {
 	type acct struct {
