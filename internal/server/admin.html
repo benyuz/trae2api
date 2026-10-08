@@ -33,6 +33,12 @@
   .keybar input { background:var(--card); border:1px solid #2a2f3a; border-radius:6px; color:var(--fg);
                   padding:5px 10px; font-size:12px; width:200px; font-family:Consolas,monospace; }
   .keybar .saved { color:var(--ok); font-size:11px; }
+  .flowbar { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
+  .flowstep { background:var(--card2); border-radius:8px; padding:8px 12px; font-size:12px; color:var(--dim); display:flex; align-items:center; gap:7px; }
+  .flowstep b { color:var(--fg); font-weight:600; }
+  .flowstep .dot { width:8px; height:8px; border-radius:50%; background:var(--dim); flex:0 0 auto; }
+  .flowstep.ok .dot { background:var(--ok); }
+  .flowstep.warn .dot { background:var(--warn); }
   /* credits grid */
   .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px; }
   .card { background:var(--card); border:1px solid #232836; border-radius:12px; padding:18px 18px 14px; }
@@ -106,6 +112,8 @@
     <span style="margin-left:auto;font-size:11px">列表/额度为只读；导入/删除/开关/登录需 Key</span>
   </div>
 
+  <div class="flowbar" id="flowbar"></div>
+
   <div class="tabs">
     <div class="tab active" onclick="switchTab('accounts',this)">账号管理</div>
     <div class="tab" onclick="switchTab('credits',this)">额度监控</div>
@@ -149,6 +157,8 @@
 <script>
 let activeTab = 'accounts';
 let loginPollTimer = null;
+// 由服务端注入的 API Key（打开面板即自动填入，免手动粘贴）。
+const SERVER_KEY = __TW2A_ADMIN_KEY__;
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function badge(text, cls){ return '<span class="badge '+cls+'">'+esc(text)+'</span>'; }
@@ -171,7 +181,9 @@ function saveKey(){
   s.style.display=''; setTimeout(()=>s.style.display='none', 1500);
 }
 (function loadKey(){
-  const k = localStorage.getItem('tw2a_admin_key') || '';
+  // 优先用服务端注入的 Key（自动填入）；否则回退浏览器本地记忆。
+  const k = SERVER_KEY || localStorage.getItem('tw2a_admin_key') || '';
+  if(SERVER_KEY){ localStorage.setItem('tw2a_admin_key', SERVER_KEY); }
   if(k){ document.getElementById('apikey').value = k; }
 })();
 
@@ -183,7 +195,33 @@ function switchTab(name, el){
   document.getElementById('pane-'+name).classList.add('active');
   refreshActive();
 }
-function refreshActive(){ if(activeTab==='accounts') loadAccounts(); else loadCredits(); }
+function refreshActive(){ loadOverview(); if(activeTab==='accounts') loadAccounts(); else loadCredits(); }
+
+/* ─── 流程状态条 ─── */
+async function loadOverview(){
+  try{
+    const r = await fetch('/admin/api/overview', {cache:'no-store'});
+    const d = await r.json();
+    renderOverview(d);
+  }catch(e){ /* 概览失败不影响主流程 */ }
+}
+function renderOverview(d){
+  const el = document.getElementById('flowbar'); if(!el) return;
+  const src = d.models_source==='dynamic' ? '动态(上游)' : '静态回退';
+  const acctCls = d.accounts_total>0 ? 'ok' : 'warn';
+  const acctTxt = d.accounts_total>0
+    ? '① 账号 <b>'+d.accounts_total+'</b> 个 · 健康 <b>'+d.accounts_healthy+'</b>'
+    : '① 账号 <b>0</b> 个 · 请点「添加账号（TRAE 登录）」';
+  const modelCls = d.models_source==='dynamic' ? 'ok' : 'warn';
+  const readyCls = d.ready ? 'ok' : 'warn';
+  const readyTxt = d.ready
+    ? '③ 就绪 · 可调用 <b>/v1/chat/completions</b>'
+    : '③ 未就绪 · 先登录一个账号';
+  el.innerHTML =
+      '<div class="flowstep '+acctCls+'"><span class="dot"></span>'+acctTxt+'</div>'
+    + '<div class="flowstep '+modelCls+'"><span class="dot"></span>② 模型表 <b>'+d.models_total+'</b> 个 · '+esc(src)+'</div>'
+    + '<div class="flowstep '+readyCls+'"><span class="dot"></span>'+readyTxt+'</div>';
+}
 
 /* ─── 账号管理 ─── */
 async function loadAccounts(){
@@ -371,6 +409,7 @@ async function loadCredits(){
 
 /* 初始 */
 loadAccounts();
+loadOverview();
 </script>
 </body>
 </html>

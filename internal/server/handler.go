@@ -102,6 +102,7 @@ func NewHandler(cfg Config) *Handler {
 	// 经 withAdminAuth 校验 Bearer = TW2A_API_KEY（见 §4 安全设计）。
 	h.mux.HandleFunc("GET /admin", h.adminPage)
 	h.mux.HandleFunc("GET /admin/api/credits", h.adminCredits)
+	h.mux.HandleFunc("GET /admin/api/overview", h.adminOverview)
 	// 账号 CRUD
 	h.mux.HandleFunc("GET /admin/api/accounts", h.adminAccounts)
 	h.mux.HandleFunc("POST /admin/api/accounts/import", h.withAdminAuth(h.adminImportAccount))
@@ -301,6 +302,12 @@ func (h *Handler) models(w http.ResponseWriter, r *http.Request) {
 
 // modelList 动态获取模型列表并包装成 OpenAI 格式；失败回退静态表。
 func (h *Handler) modelList() []map[string]any {
+	ms, _ := h.modelListWithSource()
+	return ms
+}
+
+// modelListWithSource 返回模型表与其来源（"dynamic" 上游动态 / "static" 静态回退）。
+func (h *Handler) modelListWithSource() ([]map[string]any, string) {
 	if infos := h.fetchDynamicModels(); len(infos) > 0 {
 		out := make([]map[string]any, 0, len(infos))
 		for _, mi := range infos {
@@ -316,9 +323,15 @@ func (h *Handler) modelList() []map[string]any {
 			}
 			out = append(out, entry)
 		}
-		return out
+		return out, "dynamic"
 	}
-	return staticModels
+	return staticModels, "static"
+}
+
+// ModelSummary 返回模型表规模与来源，供启动日志与管理面板展示。
+func (h *Handler) ModelSummary() (int, string) {
+	ms, src := h.modelListWithSource()
+	return len(ms), src
 }
 
 // fetchDynamicModels 从池中任一健康账号拉模型列表（get_detail_param），缓存 1h。

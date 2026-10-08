@@ -2,7 +2,9 @@
 package server
 
 import (
+	"bytes"
 	_ "embed"
+	"encoding/json"
 	"net/http"
 	"sync"
 	"time"
@@ -14,11 +16,37 @@ import (
 //go:embed admin.html
 var adminPageHTML []byte
 
+// adminKeyPlaceholder admin.html 中 API Key 注入占位符（JS 变量）。
+const adminKeyPlaceholder = "__TW2A_ADMIN_KEY__"
+
 // adminPage 返回内嵌 HTML 面板（深色简洁风，无外部依赖）。
+// 打开时把当前 API Key 注入页面，免去手动粘贴（本地面板，localhost 自用）。
 func (h *Handler) adminPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(adminPageHTML)
+	key, _ := json.Marshal(h.cfg.APIKey) // JSON 字符串（含引号），安全注入 JS
+	html := bytes.Replace(adminPageHTML, []byte(adminKeyPlaceholder), key, 1)
+	_, _ = w.Write(html)
+}
+
+// adminOverview 流程概览（只读，无鉴权）：账号数 / 模型表来源 / 是否就绪，
+// 供面板顶部「流程状态条」渲染。
+func (h *Handler) adminOverview(w http.ResponseWriter, r *http.Request) {
+	st := h.cfg.Pool.List()
+	total, healthy := len(st), 0
+	for _, s := range st {
+		if s.Enabled && !s.Disabled && !s.Cooling {
+			healthy++
+		}
+	}
+	modelN, modelSrc := h.ModelSummary()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"accounts_total":   total,
+		"accounts_healthy": healthy,
+		"models_total":     modelN,
+		"models_source":    modelSrc, // "dynamic" | "static"
+		"ready":            healthy > 0,
+	})
 }
 
 // adminCredits 查询全部账号的实时额度 + 签到状态（并发拉取上游）。

@@ -5,9 +5,12 @@ import (
 	"context"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -147,8 +150,9 @@ func main() {
 	if cfg.keyGenerated {
 		log.Printf("首次运行：已自动生成 API Key 并写入 %s", *cfgPath)
 	}
-	log.Printf("trae2api listening on %s", cfg.Listen)
-	log.Printf("API Key: %s  (请求头 Authorization: Bearer <key>)", cfg.APIKey)
+	base := panelBaseURL(cfg.Listen)
+	go openBrowser(base + "/admin")
+	go logStartupFlow(h, len(auths), base, cfg.APIKey)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("http: %v", err)
 	}
@@ -214,4 +218,50 @@ func importLocalLogin(up *upstream.Client, authDir string) *auth.Auth {
 	}
 	log.Printf("[LocalImport] 已从本机登录自动导入账号 uid=%s (%s)，来源 %s", a.UID, a.Nickname, lt.Path)
 	return a
+}
+
+// logStartupFlow 打印启动流程摘要（模型表拉取可能访问上游，故异步、不阻塞启动）。
+func logStartupFlow(h *server.Handler, accounts int, base, apiKey string) {
+	modelN, modelSrc := h.ModelSummary()
+	srcLabel := "静态回退"
+	if modelSrc == "dynamic" {
+		srcLabel = "动态(上游)"
+	}
+	log.Printf("── trae2api 启动完成 ──────────────────────────")
+	log.Printf("  ① 账号池  : %d 个", accounts)
+	log.Printf("  ② 模型表  : %d 个 · %s", modelN, srcLabel)
+	log.Printf("  ③ 管理面板: %s/admin", base)
+	log.Printf("     API    : %s/v1   (Authorization: Bearer %s)", base, apiKey)
+}
+
+// panelBaseURL 把监听地址（如 ":7864"）转成可访问的控制台 Base URL。
+func panelBaseURL(listen string) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return "http://127.0.0.1" + listen
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
+}
+
+// openBrowser 启动后自动打开管理面板（设置 TW2A_OPEN_PANEL=0 可关闭）。
+func openBrowser(url string) {
+	if os.Getenv("TW2A_OPEN_PANEL") == "0" {
+		return
+	}
+	time.Sleep(600 * time.Millisecond) // 等监听就绪，避免打开空白页
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("[Panel] 自动打开浏览器失败: %v（可手动访问 %s）", err, url)
+	}
 }
