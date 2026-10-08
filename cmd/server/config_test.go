@@ -36,19 +36,30 @@ func TestLoadFile(t *testing.T) {
 	if c.Listen != ":9999" || c.DefaultModel != "kimi-k2.7-code" || c.Schedule.CheckinHour != 7 {
 		t.Errorf("c=%+v", c)
 	}
-	// APIKey 不读 json
-	if c.APIKey != "" {
-		t.Errorf("api_key should not come from json, got %q", c.APIKey)
+	// 缺 api_key 时自动生成并落盘，重启应复用同一 Key
+	if c.APIKey == "" {
+		t.Fatal("expected auto-generated api_key")
+	}
+	c2, err := Load(fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.APIKey != c.APIKey {
+		t.Errorf("api_key not stable across restarts: %q != %q", c2.APIKey, c.APIKey)
 	}
 }
 
-func TestLoadMissingFileFallsBackToDefaults(t *testing.T) {
-	c, err := Load("/nonexistent/config.json")
+func TestLoadMissingFileCreatesDefaults(t *testing.T) {
+	fp := filepath.Join(t.TempDir(), "config.json")
+	c, err := Load(fp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Listen != ":7864" {
 		t.Errorf("listen=%s", c.Listen)
+	}
+	if _, err := os.Stat(fp); err != nil {
+		t.Errorf("config file not created: %v", err)
 	}
 }
 

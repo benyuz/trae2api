@@ -1,11 +1,15 @@
 // config.go 加载 JSON 配置 + TW2A_* 环境变量覆盖。
-// APIKey 只从环境变量 TW2A_API_KEY 读取（SPEC §0 脱敏纪律：key 走 env，不落盘 git）。
+// API Key 优先级：env TW2A_API_KEY > config.json 的 api_key > 首次运行自动生成并回写。
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -15,7 +19,7 @@ import (
 type Config struct {
 	Listen          string `json:"listen"`            // ":7864"
 	CallbackPort    string `json:"callback_port"`     // "18080"（TRAE 登录回调监听端口，0 = 不起）
-	APIKey          string `json:"-"`                 // 只读 env TW2A_API_KEY（不读 json）
+	APIKey          string `json:"api_key,omitempty"` // 首次运行自动生成并落盘本地 config.json
 	AuthDir         string `json:"auth_dir"`          // "./auths"
 	StateFile       string `json:"state_file"`        // "./data/state.json"
 	DefaultModel    string `json:"default_model"`     // "glm-5.2"
@@ -44,6 +48,9 @@ type Config struct {
 	PlanCreditDur  time.Duration `json:"-"`
 	SoftRateDur    time.Duration `json:"-"`
 	ErrCooldownDur time.Duration `json:"-"`
+
+	// keyGenerated 标记本次 API Key 是否为自动生成（供启动日志提示，不落盘）。
+	keyGenerated bool
 }
 
 // Default 返回默认配置。
@@ -70,27 +77,79 @@ func Default() *Config {
 	return c
 }
 
-// Load 从 path 读配置，再用 TW2A_* env 覆盖。path 为空或不存在时用默认 + env。
+// Load 从 path 读配置。首次运行会落盘一份默认 config.json；缺少 API Key 时自动生成并回写；
+// 最后用 TW2A_* env 覆盖（env 仅内存生效，不落盘）。path 为空时纯默认 + env。
 func Load(path string) (*Config, error) {
+	// 1) 首次运行：配置文件不存在则先落盘一份默认配置。
+	if path != "" {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			if werr := writeConfig(path, Default()); werr != nil {
+				log.Printf("write default config %s: %v", path, werr)
+			}
+		}
+	}
+
+	// 2) 读取配置文件（文件值；env 稍后覆盖）。
 	c := Default()
 	if path != "" {
 		raw, err := os.ReadFile(path)
 		if err != nil {
-			if os.IsNotExist(err) {
-				// 配置文件可选：不存在 → 纯默认 + env
-				c = Default()
-			} else {
+			if !os.IsNotExist(err) {
 				return nil, fmt.Errorf("read config: %w", err)
 			}
 		} else if err := json.Unmarshal(raw, c); err != nil {
 			return nil, fmt.Errorf("parse config: %w", err)
 		}
 	}
+
+	// 3) API Key：env 优先；否则用文件内的；都没有则自动生成并回写（不写入 env 值）。
+	if os.Getenv("TW2A_API_KEY") == "" && c.APIKey == "" {
+		key, err := randomKey()
+		if err != nil {
+			return nil, fmt.Errorf("gen api key: %w", err)
+		}
+		c.APIKey = key
+		c.keyGenerated = true
+		if path != "" {
+			if werr := writeConfig(path, c); werr != nil {
+				log.Printf("persist api key to %s: %v", path, werr)
+			}
+		}
+	}
+
+	// 4) env 覆盖（最高优先级，仅内存生效）。
 	applyEnv(c)
 	if err := c.normalize(); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+// randomKey 生成 32 位十六进制随机 API Key（128 bit 熵）。
+func randomKey() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// writeConfig 将配置以 0600 权限原子落盘（含自动生成的 API Key）。
+func writeConfig(path string, c *Config) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func applyEnv(c *Config) {

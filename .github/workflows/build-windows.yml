@@ -35,20 +35,17 @@ jobs:
         run: |
           mkdir -p dist
           go build -trimpath -ldflags="-s -w" -o dist/trae2api.exe ./cmd/server
-          cp config.example.json dist/config.example.json
 
       - name: Package zip
         run: |
           cd dist
-          zip -r ../trae2api-windows-amd64.zip .
+          zip -r ../trae2api-windows-amd64.zip trae2api.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: trae2api-windows-amd64
-          path: |
-            dist/trae2api.exe
-            trae2api-windows-amd64.zip
+          path: trae2api-windows-amd64.zip
 
       - name: Resolve release tag
         id: tag
@@ -68,6 +65,5 @@ jobs:
           name: ${{ steps.tag.outputs.tag }}
           target_commitish: ${{ github.sha }}
           files: |
-            dist/trae2api.exe
             trae2api-windows-amd64.zip
           generate_release_notes: true

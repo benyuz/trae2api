@@ -138,7 +138,11 @@ func main() {
 		}()
 	}
 
-	log.Printf("trae2api listening on %s (api_key=%v)", cfg.Listen, cfg.APIKey != "")
+	if cfg.keyGenerated {
+		log.Printf("首次运行：已自动生成 API Key 并写入 %s", *cfgPath)
+	}
+	log.Printf("trae2api listening on %s", cfg.Listen)
+	log.Printf("API Key: %s  (请求头 Authorization: Bearer <key>)", cfg.APIKey)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("http: %v", err)
 	}

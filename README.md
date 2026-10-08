@@ -76,13 +76,12 @@ curl http://127.0.0.1:7864/status
 环境要求：Go 1.22+
 
 ```bash
-# 设置访问密钥
-export TW2A_API_KEY="your_secure_api_key"
-
 # 编译并启动服务
 go build -o trae2api ./cmd/server
 ./trae2api
 ```
+
+首次运行会自动生成 `config.json`，并在未提供 API Key 时自动生成一个随机 Key（写入 `config.json` 并在启动日志中打印）。之后可用 `TW2A_API_KEY` 环境变量覆盖。
 
 ## Web 管理面板
 
@@ -137,7 +136,7 @@ curl -X POST http://127.0.0.1:7864/v1/chat/completions \
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
-| `TW2A_API_KEY` | (必填) | 服务鉴权密钥，用于 API 调用与控制台写操作 |
+| `TW2A_API_KEY` | 自动生成 | 服务鉴权密钥，用于 API 调用与控制台写操作；未设置时首次运行自动生成并写入 `config.json`，启动日志会打印 |
 | `TW2A_LISTEN` | `:7864` | 主服务监听地址及端口 |
 | `TW2A_AUTH_DIR` | `./auths` | 账号凭证存储目录 |
 | `TW2A_STATE_FILE` | `./data/state.json` | 账号池状态持久化文件 |
