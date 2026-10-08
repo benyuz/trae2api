@@ -1,0 +1,73 @@
+name: Build Windows EXE
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Create/update a GitHub Release'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build (windows/amd64)
+        env:
+          CGO_ENABLED: '0'
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w" -o dist/trae2api.exe ./cmd/server
+          cp config.example.json dist/config.example.json
+
+      - name: Package zip
+        run: |
+          cd dist
+          zip -r ../trae2api-windows-amd64.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trae2api-windows-amd64
+          path: |
+            dist/trae2api.exe
+            trae2api-windows-amd64.zip
+
+      - name: Resolve release tag
+        id: tag
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=win-build-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          files: |
+            dist/trae2api.exe
+            trae2api-windows-amd64.zip
+          generate_release_notes: true
