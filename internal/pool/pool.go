@@ -116,17 +116,19 @@ type stateEntry struct {
 
 // stateFile 持久化格式。
 type stateFile struct {
-	Accounts map[string]stateEntry `json:"accounts"`
+	Accounts  map[string]stateEntry `json:"accounts"`
+	Preferred string                `json:"preferred,omitempty"` // 优先/当前账号 uid（手动切换用）
 }
 
 // Pool 账号池。
 type Pool struct {
-	mu          sync.RWMutex
-	byUID       map[string]*entry
-	stateFp     string
-	affinity    map[string]affinityEntry
-	affinityTTL time.Duration
-	maxInFlight int
+	mu           sync.RWMutex
+	byUID        map[string]*entry
+	stateFp      string
+	affinity     map[string]affinityEntry
+	affinityTTL  time.Duration
+	maxInFlight  int
+	preferredUID string // 优先账号：健康时优先选中（手动切换，用于针对性消耗某账号积分）
 }
 
 type affinityEntry struct {
@@ -234,6 +236,10 @@ func (p *Pool) SyncToDir(auths []*auth.Auth) {
 			delete(p.byUID, uid)
 		}
 	}
+	// 当前账号已被删除 → 清空优先设置
+	if p.preferredUID != "" && !seen[p.preferredUID] {
+		p.preferredUID = ""
+	}
 }
 
 // Remove 删除账号（仅清内存索引与 state.json 条目；auths/trae-{uid}.json 由调用方删）。
@@ -277,12 +283,30 @@ func (p *Pool) Pick() *auth.Auth {
 	return p.PickExcluding(nil)
 }
 
+// SetPreferred 设置优先/当前账号（uid 为空表示取消优先）。持久化到 state.json。
+func (p *Pool) SetPreferred(uid string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.preferredUID = uid
+	p.saveLocked()
+}
+
+// Preferred 返回当前优先/当前账号 uid（未设置返回空）。
+func (p *Pool) Preferred() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.preferredUID
+}
+
 // PickExcluding 同上，但跳过 tried 中的 uid（请求级轮换）。
-// 优化：当积分相同时按 UID 升序稳定排序，避免 Go map 随机遍历导致在相同积分账号间跳跃。
+// 优先返回「当前账号」（若健康且未被排除）；否则按积分降序稳定排序挑选。
 func (p *Pool) PickExcluding(tried map[string]bool) *auth.Auth {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	now := time.Now()
+	if a := p.pickPreferredLocked(tried, now); a != nil {
+		return a
+	}
 	var best *entry
 	for uid, e := range p.byUID {
 		if tried != nil && tried[uid] {
@@ -299,6 +323,22 @@ func (p *Pool) PickExcluding(tried map[string]bool) *auth.Auth {
 		return nil
 	}
 	return best.a
+}
+
+// pickPreferredLocked 返回当前账号（若已设置且健康、未被排除、未占满在途）。
+// 调用方需持有 p.mu（读或写锁）；只读，不修改状态（避免读锁下写）。
+func (p *Pool) pickPreferredLocked(tried map[string]bool, now time.Time) *auth.Auth {
+	if p.preferredUID == "" {
+		return nil
+	}
+	if tried != nil && tried[p.preferredUID] {
+		return nil
+	}
+	e, ok := p.byUID[p.preferredUID]
+	if !ok || !e.healthy(now) || p.inFlightFull(e) {
+		return nil
+	}
+	return e.a
 }
 
 const minPickGap = 100 * time.Millisecond
@@ -331,7 +371,14 @@ func (p *Pool) weightOf(e *entry, maxCredits int64, now time.Time) float64 {
 }
 
 // pickBestCandidateLocked 综合健康检查、在途租约、三因子权重与防惊群窗口选号。
+// 优先返回「当前账号」（若健康、未排除、未占满在途）。
 func (p *Pool) pickBestCandidateLocked(tried map[string]bool, now time.Time) *entry {
+	if p.preferredUID != "" && (tried == nil || !tried[p.preferredUID]) {
+		if e, ok := p.byUID[p.preferredUID]; ok && e.healthy(now) && !p.inFlightFull(e) {
+			e.lastUsed = now
+			return e
+		}
+	}
 	var cands []*entry
 	for uid, e := range p.byUID {
 		if tried != nil && tried[uid] {
@@ -739,6 +786,7 @@ func (p *Pool) load() {
 	if json.Unmarshal(raw, &sf) != nil {
 		return
 	}
+	p.preferredUID = sf.Preferred
 	for uid, s := range sf.Accounts {
 		enabled := true // 旧文件无 enabled 字段 → 默认启用，向后兼容
 		if s.Enabled != nil {
@@ -766,7 +814,7 @@ func (p *Pool) saveLocked() {
 	if p.stateFp == "" {
 		return
 	}
-	sf := stateFile{Accounts: map[string]stateEntry{}}
+	sf := stateFile{Accounts: map[string]stateEntry{}, Preferred: p.preferredUID}
 	for uid, e := range p.byUID {
 		se := stateEntry{
 			Credits:    e.credits,

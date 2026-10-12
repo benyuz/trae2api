@@ -94,6 +94,18 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go sch.Run(ctx)
+	// 启动即执行一次签到（补齐当日；之后按 CheckinHour 每日自动执行）。
+	// 设置 TW2A_CHECKIN_ON_START=0 可关闭。
+	if os.Getenv("TW2A_CHECKIN_ON_START") != "0" {
+		go func() {
+			time.Sleep(5 * time.Second) // 等账号状态稳定
+			if len(auths) > 0 {
+				log.Printf("[Checkin] 启动签到：开始")
+				sch.RunCheckinNow()
+				log.Printf("[Checkin] 启动签到：完成")
+			}
+		}()
+	}
 
 	// 启动时在后台探测所有可用账号的 work_credits 积分状态
 	if workClient.Mode() != upstream.WorkModeDisabled {

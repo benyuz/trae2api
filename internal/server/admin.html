@@ -101,6 +101,7 @@
     <div class="toolbar">
       <span id="ts"></span>
       <button class="btn" onclick="showModels(false)">可用模型</button>
+      <button class="btn" onclick="doCheckin()">签到</button>
       <button class="btn" onclick="refreshActive()">刷新</button>
     </div>
   </header>
@@ -213,8 +214,9 @@ function renderOverview(d){
   const el = document.getElementById('flowbar'); if(!el) return;
   const src = d.models_source==='dynamic' ? '动态(上游)' : '静态回退';
   const acctCls = d.accounts_total>0 ? 'ok' : 'warn';
+  const cur = d.preferred_uid ? ' · 当前 '+esc(String(d.preferred_uid).slice(0,8)) : '';
   const acctTxt = d.accounts_total>0
-    ? '① 账号 <b>'+d.accounts_total+'</b> 个 · 健康 <b>'+d.accounts_healthy+'</b>'
+    ? '① 账号 <b>'+d.accounts_total+'</b> 个 · 健康 <b>'+d.accounts_healthy+'</b>'+cur
     : '① 账号 <b>0</b> 个 · 请点「添加账号（TRAE 登录）」';
   const modelCls = d.models_source==='dynamic' ? 'ok' : 'warn';
   const readyCls = d.ready ? 'ok' : 'warn';
@@ -232,28 +234,33 @@ async function loadAccounts(){
   try{
     const r = await fetch('/admin/api/accounts', {cache:'no-store'});
     const d = await r.json();
-    renderAccounts(d.accounts||[]);
+    renderAccounts(d.accounts||[], d.preferred_uid||'');
     document.getElementById('ts').textContent = '更新于 ' + new Date().toLocaleTimeString();
   }catch(e){
     document.getElementById('acctTable').innerHTML = '<div style="color:var(--bad)">加载失败：'+esc(e.message)+'（服务是否在运行？）</div>';
   }
 }
-function renderAccounts(accts){
+function renderAccounts(accts, preferred){
   const el = document.getElementById('acctTable');
   if(!accts.length){
     el.innerHTML = '<div style="color:var(--dim);padding:14px">暂无账号，点上方「添加账号」登录，或粘贴回调链接导入。</div>';
     return;
   }
   let rows = accts.map(a=>{
+    const isCur = preferred && a.uid === preferred;
     let badges = '';
     if(a.disabled) badges += badge('禁用(session dead)','b-bad');
     else if(!a.enabled) badges += badge('已停用','b-warn');
     else if(a.cooling) badges += badge('冷却','b-warn');
     else badges += badge('正常','b-ok');
     if(a.expired_soon) badges += badge('token将过期','b-warn');
+    if(isCur) badges += badge('当前使用','b-ok');
     const exp = a.expires_at ? new Date(a.expires_at*1000).toLocaleString() : '-';
     const toggleChecked = a.enabled && !a.disabled ? 'checked' : '';
     const toggleDisabled = a.disabled ? 'disabled' : '';
+    const curBtn = isCur
+      ? '<button class="btn sm" onclick="setPreferred(\'\')">取消当前</button>'
+      : '<button class="btn sm" onclick="setPreferred(\''+esc(a.uid)+'\')">设为当前</button>';
     return '<tr>'
       + '<td><div class="nick">'+esc(a.nickname||'(未命名)')+'</div>'
       + '<div class="uid mono">'+esc(a.uid)+'</div></td>'
@@ -262,6 +269,7 @@ function renderAccounts(accts){
       + '<td class="mono">'+esc(exp)+'</td>'
       + '<td class="mono">'+esc(a.machine_id||'-')+' / '+esc(a.device_id||'-')+'</td>'
       + '<td><div class="row-actions">'
+      + curBtn
       + '<label class="toggle"><input type="checkbox" '+toggleChecked+' '+toggleDisabled+' onchange="toggleAcct(\''+esc(a.uid)+'\', this.checked)"><span class="slider"></span></label>'
       + '<button class="btn sm" onclick="refreshAcct(\''+esc(a.uid)+'\')">刷新token</button>'
       + '<button class="btn sm" onclick="showJSON(\''+esc(a.uid)+'\')">JSON</button>'
@@ -279,6 +287,27 @@ async function toggleAcct(uid, enabled){
     body: JSON.stringify({enabled: enabled})
   });
   if(!r.ok){ const e = await r.json().catch(()=>({})); alert('切换失败：'+apiErr(e)); loadAccounts(); return; }
+  loadAccounts();
+}
+// 设置/取消「当前账号」（针对性消耗该账号积分）。
+async function setPreferred(uid){
+  const r = await fetch('/admin/api/prefer', {
+    method:'POST', headers:{'Content-Type':'application/json', ...authHeader()},
+    body: JSON.stringify({uid: uid||''})
+  });
+  if(!r.ok){ const e = await r.json().catch(()=>({})); alert('切换失败：'+apiErr(e)); }
+  loadAccounts(); loadOverview();
+}
+// 立即对所有账号签到，结果用弹窗展示。
+async function doCheckin(){
+  const r = await fetch('/admin/api/checkin', {method:'POST', headers: authHeader()});
+  const d = await r.json().catch(()=>({}));
+  if(!r.ok){ alert('签到失败：'+apiErr(d)); return; }
+  const lines = (d.results||[]).map(x=>(x.ok?'✓ ':'✗ ')+(x.nickname||x.uid)+'  '+(x.message||''));
+  document.getElementById('modalTitle').textContent = '签到结果';
+  document.getElementById('modalBody').textContent = lines.length ? lines.join('\n') : '（无账号）';
+  setModalAction(null);
+  document.getElementById('modalBg').classList.add('show');
   loadAccounts();
 }
 async function refreshAcct(uid){

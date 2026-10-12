@@ -9,6 +9,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -62,7 +63,7 @@ func (h *Handler) adminAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, sum)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"accounts": out})
+	writeJSON(w, http.StatusOK, map[string]any{"accounts": out, "preferred_uid": h.cfg.Pool.Preferred()})
 }
 
 // importRequest 导入请求体。
@@ -346,6 +347,72 @@ func (h *Handler) adminAccountJSON(w http.ResponseWriter, r *http.Request) {
 		"expires_at":    a.ExpiresAt,
 		"file_path":     a.FilePath,
 	})
+}
+
+// ---------------------------------------------------------------------------
+// 当前账号切换 + 手动签到
+// ---------------------------------------------------------------------------
+
+// preferRequest POST /admin/api/prefer 体：{uid}；uid 为空 = 取消当前账号。
+type preferRequest struct {
+	UID string `json:"uid"`
+}
+
+// adminSetPreferred 设置/取消「当前账号」（手动切换，用于针对性消耗某账号积分）。
+func (h *Handler) adminSetPreferred(w http.ResponseWriter, r *http.Request) {
+	var req preferRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		return
+	}
+	req.UID = strings.TrimSpace(req.UID)
+	if req.UID != "" && h.cfg.Pool.AuthByUID(req.UID) == nil {
+		writeOpenAIError(w, http.StatusNotFound, "not_found", "account not found: "+req.UID)
+		return
+	}
+	h.cfg.Pool.SetPreferred(req.UID)
+	writeJSON(w, http.StatusOK, map[string]any{"preferred_uid": h.cfg.Pool.Preferred()})
+}
+
+// checkinResult 单账号签到结果。
+type checkinResult struct {
+	UID      string `json:"uid"`
+	Nickname string `json:"nickname,omitempty"`
+	OK       bool   `json:"ok"`
+	Message  string `json:"message"`
+}
+
+// adminCheckin 立即对所有账号执行签到（手动触发；每日自动签到由调度器负责）。
+func (h *Handler) adminCheckin(w http.ResponseWriter, r *http.Request) {
+	results := []checkinResult{}
+	for _, s := range h.cfg.Pool.List() {
+		if s.Disabled {
+			continue
+		}
+		a := h.cfg.Pool.AuthByUID(s.UID)
+		if a == nil {
+			continue
+		}
+		res := checkinResult{UID: s.UID, Nickname: s.Nickname}
+		checkedIn, credits, enable, err := h.cfg.Upstream.CheckinStatus(a)
+		switch {
+		case err != nil:
+			res.Message = "查询失败: " + err.Error()
+		case checkedIn:
+			res.OK = true
+			res.Message = fmt.Sprintf("已签到（当前积分 %d）", credits)
+		case !enable:
+			res.Message = "签到未开放"
+		default:
+			if cerr := h.cfg.Upstream.CheckinClaim(a); cerr != nil {
+				res.Message = "签到失败: " + cerr.Error()
+			} else {
+				res.OK = true
+				res.Message = "签到成功"
+			}
+		}
+		results = append(results, res)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
 // ---------------------------------------------------------------------------

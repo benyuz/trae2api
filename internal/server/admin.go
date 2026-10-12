@@ -46,6 +46,7 @@ func (h *Handler) adminOverview(w http.ResponseWriter, r *http.Request) {
 		"models_total":     modelN,
 		"models_source":    modelSrc, // "dynamic" | "static"
 		"ready":            healthy > 0,
+		"preferred_uid":    h.cfg.Pool.Preferred(),
 	})
 }
 

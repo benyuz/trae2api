@@ -111,6 +111,9 @@ func NewHandler(cfg Config) *Handler {
 	h.mux.HandleFunc("PATCH /admin/api/accounts/{uid}", h.withAdminAuth(h.adminPatchAccount))
 	h.mux.HandleFunc("POST /admin/api/accounts/{uid}/refresh", h.withAdminAuth(h.adminRefreshAccount))
 	h.mux.HandleFunc("GET /admin/api/accounts/{uid}/json", h.adminAccountJSON)
+	// 当前账号切换 + 签到
+	h.mux.HandleFunc("POST /admin/api/prefer", h.withAdminAuth(h.adminSetPreferred))
+	h.mux.HandleFunc("POST /admin/api/checkin", h.withAdminAuth(h.adminCheckin))
 	// Web 登录闭环
 	h.mux.HandleFunc("POST /admin/api/login", h.withAdminAuth(h.adminLoginStart))
 	h.mux.HandleFunc("GET /admin/api/login/result", h.adminLoginResult)
