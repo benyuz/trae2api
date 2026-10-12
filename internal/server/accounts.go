@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"trae2api/internal/auth"
 )
@@ -393,22 +394,16 @@ func (h *Handler) adminCheckin(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		res := checkinResult{UID: s.UID, Nickname: s.Nickname}
-		checkedIn, credits, enable, err := h.cfg.Upstream.CheckinStatus(a)
+		// 瞬时错误（如 9074 参与用户太多）自动退避重试；请求上下文取消则提前结束。
+		checkedIn, credits, enable, err := h.cfg.Upstream.CheckinWithRetry(r.Context(), a, 3, 2*time.Second)
 		switch {
 		case err != nil:
-			res.Message = "查询失败: " + err.Error()
+			res.Message = "签到失败: " + err.Error()
 		case checkedIn:
 			res.OK = true
 			res.Message = fmt.Sprintf("已签到（当前积分 %d）", credits)
 		case !enable:
 			res.Message = "签到未开放"
-		default:
-			if cerr := h.cfg.Upstream.CheckinClaim(a); cerr != nil {
-				res.Message = "签到失败: " + cerr.Error()
-			} else {
-				res.OK = true
-				res.Message = "签到成功"
-			}
 		}
 		results = append(results, res)
 	}

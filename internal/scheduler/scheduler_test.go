@@ -1,6 +1,7 @@
-﻿package scheduler
+package scheduler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -103,7 +104,7 @@ func TestRunCheckinReenablesCoolingAccount(t *testing.T) {
 	p.Cooldown("u1", pool.CoolPlan, time.Hour, "plan limit")
 
 	s := newTestScheduler(f, p, srv)
-	s.RunCheckinNow()
+	s.RunCheckinNow(context.Background())
 	if f.checkinCalls.Load() != 1 {
 		t.Errorf("checkin status calls=%d", f.checkinCalls.Load())
 	}
@@ -129,7 +130,7 @@ func TestRunCheckinSkipsDisabled(t *testing.T) {
 	p.Disable("u1", "session dead")
 
 	s := newTestScheduler(f, p, srv)
-	s.RunCheckinNow()
+	s.RunCheckinNow(context.Background())
 	if f.checkinCalls.Load() != 0 {
 		t.Errorf("disabled account should be skipped, calls=%d", f.checkinCalls.Load())
 	}

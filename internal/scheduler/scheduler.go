@@ -1,4 +1,4 @@
-﻿// Package scheduler 定时任务：每日签到 + token 预刷新。
+// Package scheduler 定时任务：每日签到 + token 预刷新。
 // 签到成功后重新查积分，积分 > 0 的冷却账号自动解冻。
 package scheduler
 
@@ -71,7 +71,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 				s.RunRefreshNow()
 			}
 			if s.cfg.CheckinHour == h {
-				s.RunCheckinNow()
+				s.RunCheckinNow(ctx)
 			}
 		}
 	}
@@ -88,7 +88,8 @@ func contains(hours []int, h int) bool {
 
 // RunCheckinNow 立即对所有账号执行签到 + 积分刷新 + 解冻。
 // 冷却中的账号也参与（签到就是为了解冻它们）；禁用的跳过。
-func (s *Scheduler) RunCheckinNow() {
+// 签到对瞬时错误（如 9074 参与用户太多）做带退避的重试。
+func (s *Scheduler) RunCheckinNow(ctx context.Context) {
 	for _, st := range s.cfg.Pool.List() {
 		if st.Disabled {
 			continue
@@ -97,18 +98,15 @@ func (s *Scheduler) RunCheckinNow() {
 		if a == nil || a.RefreshTokenValue() == "" {
 			continue
 		}
-		// 签到（status → 未签到则 claim）
-		checkedIn, _, enable, err := s.cfg.Upstream.CheckinStatus(a)
-		if err != nil {
-			log.Printf("checkin status %s: %v", st.UID, err)
-		} else if !checkedIn && enable {
-			if err := s.cfg.Upstream.CheckinClaim(a); err != nil {
-				log.Printf("checkin claim %s: %v", st.UID, err)
-			} else {
-				log.Printf("checkin %s: ok", st.UID)
-			}
-		} else if checkedIn {
-			log.Printf("checkin %s: already checked in", st.UID)
+		// 签到（status → 未签到则 claim），9074 等瞬时错误自动退避重试。
+		checkedIn, _, enable, err := s.cfg.Upstream.CheckinWithRetry(ctx, a, 4, 5*time.Second)
+		switch {
+		case err != nil:
+			log.Printf("checkin %s: %v", st.UID, err)
+		case checkedIn:
+			log.Printf("checkin %s: ok/already", st.UID)
+		case !enable:
+			log.Printf("checkin %s: 签到未开放", st.UID)
 		}
 		// 查积分 + 解冻
 		remain, err := s.cfg.Upstream.UserEntUsage(a)

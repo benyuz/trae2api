@@ -4,6 +4,7 @@ package upstream
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -360,6 +361,63 @@ func (c *Client) CheckinClaim(a *auth.Auth) error {
 		return fmt.Errorf("%d %s", resp.Code, resp.Message)
 	}
 	return nil
+}
+
+// checkinRetryCodes 可重试的签到业务错误码（瞬时性，非凭证失效）。
+var checkinRetryCodes = []string{"9074"}
+
+// IsRetryableCheckinErr 判断签到错误是否值得重试（如 9074 当前参与用户太多）。
+func IsRetryableCheckinErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, c := range checkinRetryCodes {
+		if strings.Contains(msg, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// CheckinWithRetry 执行一次完整签到（status → 未签到则 claim），对瞬时错误（如 9074
+// 当前参与用户太多）做指数退避重试。返回 (是否已签到/成功, 积分, 是否开放, 错误)。
+// ctx 取消时提前结束；attempts 为最大尝试次数，baseDelay 为首次退避间隔。
+func (c *Client) CheckinWithRetry(ctx context.Context, a *auth.Auth, attempts int, baseDelay time.Duration) (checkedIn bool, credits int64, enable bool, err error) {
+	if attempts < 1 {
+		attempts = 1
+	}
+	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			delay := baseDelay * time.Duration(1<<(i-1)) // 指数退避：base, 2×base, 4×base...
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return checkedIn, credits, enable, err
+			case <-timer.C:
+			}
+		}
+		checkedIn, credits, enable, err = c.CheckinStatus(a)
+		if err != nil {
+			if !IsRetryableCheckinErr(err) {
+				return checkedIn, credits, enable, err
+			}
+			continue
+		}
+		if checkedIn || !enable {
+			return checkedIn, credits, enable, nil
+		}
+		if cerr := c.CheckinClaim(a); cerr != nil {
+			err = cerr
+			if IsRetryableCheckinErr(cerr) {
+				continue
+			}
+			return false, credits, enable, cerr
+		}
+		return true, credits, enable, nil
+	}
+	return checkedIn, credits, enable, err
 }
 
 // UserEntUsage 聚合积分（ide_user_ent_usage 的 credits_limit 求和）。

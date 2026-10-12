@@ -101,7 +101,7 @@ func main() {
 			time.Sleep(5 * time.Second) // 等账号状态稳定
 			if len(auths) > 0 {
 				log.Printf("[Checkin] 启动签到：开始")
-				sch.RunCheckinNow()
+				sch.RunCheckinNow(ctx)
 				log.Printf("[Checkin] 启动签到：完成")
 			}
 		}()
