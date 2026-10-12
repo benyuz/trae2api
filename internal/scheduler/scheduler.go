@@ -88,8 +88,10 @@ func contains(hours []int, h int) bool {
 
 // RunCheckinNow 立即对所有账号执行签到 + 积分刷新 + 解冻。
 // 冷却中的账号也参与（签到就是为了解冻它们）；禁用的跳过。
-// 签到对瞬时错误（如 9074 参与用户太多）做带退避的重试。
+// 签到对瞬时错误（如 9074 参与用户太多）做带退避的重试；账号之间加间隔（stagger），
+// 避免同一 IP 短时间内连续 claim 触发上游限流（实测多账号连签易出现 9074）。
 func (s *Scheduler) RunCheckinNow(ctx context.Context) {
+	first := true
 	for _, st := range s.cfg.Pool.List() {
 		if st.Disabled {
 			continue
@@ -98,11 +100,16 @@ func (s *Scheduler) RunCheckinNow(ctx context.Context) {
 		if a == nil || a.RefreshTokenValue() == "" {
 			continue
 		}
+		// 账号间隔：首个立即执行，其后每个之间等待 stagger（可被 ctx 取消）。
+		if !first && !sleepCtx(ctx, checkinStagger) {
+			return
+		}
+		first = false
 		// 签到（status → 未签到则 claim），9074 等瞬时错误自动退避重试。
 		checkedIn, _, enable, err := s.cfg.Upstream.CheckinWithRetry(ctx, a, 4, 5*time.Second)
 		switch {
 		case err != nil:
-			log.Printf("checkin %s: %v", st.UID, err)
+			log.Printf("checkin %s (device=%s): %v", st.UID, devicePrefix(a.DeviceID), err)
 		case checkedIn:
 			log.Printf("checkin %s: ok/already", st.UID)
 		case !enable:
@@ -116,6 +123,29 @@ func (s *Scheduler) RunCheckinNow(ctx context.Context) {
 		}
 		s.cfg.Pool.ReenableIfCredits(st.UID, remain)
 	}
+}
+
+// checkinStagger 多账号签到之间的最小间隔（避免同 IP 连续 claim 被限流）。
+const checkinStagger = 3 * time.Second
+
+// sleepCtx 等待 d 或 ctx 取消；ctx 取消返回 false。
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// devicePrefix 取 device id 前 8 位用于日志（脱敏）。
+func devicePrefix(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 // RunRefreshNow 立即对所有账号刷新 token；session 失效的自动禁用。
